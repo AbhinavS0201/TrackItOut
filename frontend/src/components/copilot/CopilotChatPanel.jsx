@@ -147,25 +147,29 @@ export default function CopilotChatPanel() {
 
                 {msg.action.module === 'Nutrition' && (
                   <div className="text-xs text-slate-200 space-y-1 mb-3">
-                    <div className="font-semibold text-white">{msg.action.productName}</div>
-                    <div className="grid grid-cols-4 gap-1.5 text-center mt-2 text-[10px]">
-                      <div className="bg-white/10 p-1.5 rounded-lg">
-                        <div className="text-electric-blue font-bold">{msg.action.calories}</div>
-                        <div className="text-slate-400">kcal</div>
-                      </div>
-                      <div className="bg-white/10 p-1.5 rounded-lg">
-                        <div className="text-aqua-teal font-bold">{msg.action.protein}g</div>
-                        <div className="text-slate-400">Protein</div>
-                      </div>
-                      <div className="bg-white/10 p-1.5 rounded-lg">
-                        <div className="text-pastel-lavender font-bold">{msg.action.carbs}g</div>
-                        <div className="text-slate-400">Carbs</div>
-                      </div>
-                      <div className="bg-white/10 p-1.5 rounded-lg">
-                        <div className="text-amber-400 font-bold">{msg.action.fats}g</div>
-                        <div className="text-slate-400">Fats</div>
-                      </div>
+                    <div className="font-semibold text-white">
+                      {msg.action.productName || (msg.action.type === 'Water' ? `Water Intake: ${msg.action.water_ml} ml` : 'Meal')}
                     </div>
+                    {msg.action.type !== 'Water' && (
+                      <div className="grid grid-cols-4 gap-1.5 text-center mt-2 text-[10px]">
+                        <div className="bg-white/10 p-1.5 rounded-lg">
+                          <div className="text-electric-blue font-bold">{msg.action.calories || '—'}</div>
+                          <div className="text-slate-400">kcal</div>
+                        </div>
+                        <div className="bg-white/10 p-1.5 rounded-lg">
+                          <div className="text-aqua-teal font-bold">{msg.action.protein || '—'}g</div>
+                          <div className="text-slate-400">Protein</div>
+                        </div>
+                        <div className="bg-white/10 p-1.5 rounded-lg">
+                          <div className="text-pastel-lavender font-bold">{msg.action.carbs || '—'}g</div>
+                          <div className="text-slate-400">Carbs</div>
+                        </div>
+                        <div className="bg-white/10 p-1.5 rounded-lg">
+                          <div className="text-amber-400 font-bold">{msg.action.fats || '—'}g</div>
+                          <div className="text-slate-400">Fats</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

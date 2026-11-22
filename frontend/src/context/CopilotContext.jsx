@@ -11,7 +11,7 @@ export function CopilotProvider({ children }) {
     {
       id: 'welcome',
       sender: 'copilot',
-      text: "Hello! I'm your TrackItOut Life Copilot. I can track your expenses, log meals, record workouts, and monitor habits. Try speaking or typing commands like:\n• 'I spent 150 rupees on lunch'\n• 'I ate 100 grams Pintola oats with milk'\n• 'Completed chest workout: 40kg bench press 3 sets of 12'\n• 'Drank 500 ml water'",
+      text: "Hello! I'm your TrackItOut Life Copilot. I can track your expenses, log meals, record workouts, and monitor habits. Try speaking or typing commands like:\n• 'I spent 150 rupees on lunch'\n• 'I ate 150g roasted chicken'\n• 'I had 100g Pintola oats'\n• 'Drank 500 ml water'",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -91,6 +91,15 @@ export function CopilotProvider({ children }) {
     }
   };
 
+  // Determine current meal type from time of day
+  const getInferredMealType = () => {
+    const hour = new Date().getHours();
+    if (hour < 11) return 'Breakfast';
+    if (hour < 16) return 'Lunch';
+    if (hour < 19) return 'Snacks';
+    return 'Dinner';
+  };
+
   // Process user text or voice command
   const processCommand = async (input) => {
     const text = input.trim();
@@ -108,13 +117,36 @@ export function CopilotProvider({ children }) {
     setIsProcessing(true);
 
     try {
-      // Natural language pattern matcher & intent resolver
       const lower = text.toLowerCase();
       let responseMsg = '';
       let action = null;
 
-      // 1. Finance Intent: Spent / Received / Expense
-      if (lower.includes('spent') || lower.includes('paid') || lower.includes('bought') || lower.includes('rupees') || lower.includes('₹') || lower.includes('received')) {
+      // 1. Water Tracking Intent
+      if (lower.includes('water') && (lower.includes('drank') || lower.includes('had') || lower.includes('log') || lower.includes('drink') || lower.includes('consumed') || lower.includes('ml') || lower.includes('liter') || lower.includes('litre'))) {
+        let ml = 250;
+        const mlMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:ml|milliliter|millilitre|milliliters|millilitres)\b/i);
+        const lMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:l|liter|litre|liters|litres)\b/i);
+        const bareNumMatch = text.match(/\b(\d+)\b/);
+
+        if (mlMatch) {
+          ml = parseInt(mlMatch[1], 10);
+        } else if (lMatch) {
+          ml = Math.round(parseFloat(lMatch[1]) * 1000);
+        } else if (bareNumMatch) {
+          ml = parseInt(bareNumMatch[1], 10);
+        }
+
+        action = {
+          module: 'Nutrition',
+          type: 'Water',
+          water_ml: ml,
+          description: text,
+          date: new Date().toISOString().split('T')[0],
+        };
+        responseMsg = `I extracted a hydration entry of ${ml} ml. Please review and confirm to log this to your daily water intake.`;
+      }
+      // 2. Finance Intent: Spent / Received / Expense
+      else if (lower.includes('spent') || lower.includes('paid') || lower.includes('bought') || lower.includes('rupees') || lower.includes('₹') || lower.includes('received')) {
         const isIncome = lower.includes('received') || lower.includes('earned') || lower.includes('salary');
         const amountMatch = text.match(/(?:(?:rs\.?|inr|₹)\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:rs|rupees|inr|₹)?)/i);
         const amount = amountMatch ? parseFloat(amountMatch[1] || amountMatch[2]) : null;
@@ -140,58 +172,121 @@ export function CopilotProvider({ children }) {
           responseMsg = "I recognized this as a finance transaction, but couldn't detect the exact amount. How much did you spend or receive?";
         }
       }
-      // 2. Nutrition Intent: Oats / Eggs / Protein / Food / Ate
-      else if (lower.includes('ate') || lower.includes('had') || lower.includes('drank milk') || lower.includes('oats') || lower.includes('paneer') || lower.includes('protein') || lower.includes('grams') || lower.includes('calories')) {
-        let isBranded = false;
-        let productName = 'Custom Food';
-        let calories = 350;
-        let protein = 24;
-        let carbs = 42;
-        let fats = 8;
+      // 3. Nutrition Meal Intent: Ate / Had / Food / Chicken / Oats / Paneer / Whey
+      else if (lower.includes('ate') || lower.includes('had') || lower.includes('eaten') || lower.includes('oats') || lower.includes('chicken') || lower.includes('paneer') || lower.includes('whey') || lower.includes('egg') || lower.includes('lassi') || lower.includes('meal')) {
+        let mealType = getInferredMealType();
+        if (lower.includes('breakfast')) mealType = 'Breakfast';
+        else if (lower.includes('lunch')) mealType = 'Lunch';
+        else if (lower.includes('dinner')) mealType = 'Dinner';
+        else if (lower.includes('snack') || lower.includes('snacks')) mealType = 'Snacks';
 
-        if (lower.includes('pintola')) {
-          isBranded = true;
-          productName = 'Pintola High Protein Rolled Oats';
-          calories = 398;
-          protein = 26;
-          carbs = 58;
-          fats = 8.5;
-        } else if (lower.includes('milky mist')) {
-          isBranded = true;
-          productName = 'Milky Mist High Protein Paneer';
-          calories = 265;
-          protein = 25;
-          carbs = 4;
-          fats = 16;
-        } else if (lower.includes('bigmuscles') || lower.includes('whey')) {
-          isBranded = true;
-          productName = 'BigMuscles Premium Gold Whey';
-          calories = 135;
-          protein = 25;
-          carbs = 2.5;
-          fats = 1.5;
+        // Extract quantity and unit
+        let quantity = 100;
+        let unit = 'g';
+        const qtyMatch = text.match(/(\d+(?:\.\d+)?)\s*(g|grams?|ml|milliliters?|millilitres?|scoops?|servings?|pieces?|pcs?|packs?)\b/i);
+        if (qtyMatch) {
+          quantity = parseFloat(qtyMatch[1]);
+          const rawUnit = qtyMatch[2].toLowerCase();
+          if (rawUnit.startsWith('gram') || rawUnit === 'g') unit = 'g';
+          else if (rawUnit.startsWith('ml') || rawUnit.startsWith('milli')) unit = 'ml';
+          else if (rawUnit.startsWith('scoop')) unit = 'scoop';
+          else if (rawUnit.startsWith('pack')) unit = 'pack';
+          else if (rawUnit.startsWith('piece') || rawUnit === 'pcs') unit = 'serving';
+          else unit = 'serving';
+        }
+
+        // Match against catalog
+        let productName = 'Custom Food';
+        let brand = 'Generic';
+        let foodProductId = null;
+        let calories = 250;
+        let protein = 20;
+        let carbs = 25;
+        let fats = 6;
+        let isVerified = false;
+
+        if (lower.includes('chicken')) {
+          brand = 'Generic';
+          productName = 'Chicken Breast (Roasted)';
+          if (lower.includes('grilled')) productName = 'Chicken Breast (Grilled)';
+          else if (lower.includes('raw')) productName = 'Chicken Breast (Raw)';
+          else if (lower.includes('stewed') || lower.includes('boiled')) productName = 'Chicken Breast (Stewed)';
+          
+          // Roasted chicken per 100g: 165 kcal, 31.02g protein, 3.57g fat
+          const factor = (unit === 'g' ? quantity : 100) / 100;
+          calories = parseFloat((165 * factor).toFixed(2));
+          protein = parseFloat((31.02 * factor).toFixed(2));
+          carbs = 0;
+          fats = parseFloat((3.57 * factor).toFixed(2));
+          isVerified = true;
+        } else if (lower.includes('pintola') || lower.includes('oat')) {
+          brand = 'Pintola';
+          productName = 'High Protein Rolled Oats';
+          const factor = (unit === 'g' ? quantity : 40) / 100;
+          calories = parseFloat((392 * factor).toFixed(2));
+          protein = parseFloat((25 * factor).toFixed(2));
+          carbs = parseFloat((54.6 * factor).toFixed(2));
+          fats = parseFloat((7.8 * factor).toFixed(2));
+        } else if (lower.includes('whey') || lower.includes('bigmuscles')) {
+          brand = 'BigMuscles Nutrition';
+          productName = 'Premium Gold Whey Protein';
+          unit = 'scoop';
+          if (!qtyMatch) quantity = 1;
+          calories = parseFloat((136.2 * quantity).toFixed(2));
+          protein = parseFloat((25.0 * quantity).toFixed(2));
+          carbs = parseFloat((5.0 * quantity).toFixed(2));
+          fats = parseFloat((1.8 * quantity).toFixed(2));
+          isVerified = true;
+        } else if (lower.includes('paneer') || lower.includes('milky mist')) {
+          brand = 'Milky Mist';
+          productName = 'High Protein Low Fat Paneer';
+          const factor = (unit === 'g' ? quantity : 100) / 100;
+          calories = parseFloat((190 * factor).toFixed(2));
+          protein = parseFloat((25.0 * factor).toFixed(2));
+          carbs = parseFloat((5.7 * factor).toFixed(2));
+          fats = parseFloat((7.0 * factor).toFixed(2));
+        } else if (lower.includes('lassi') || lower.includes('amul')) {
+          brand = 'Amul';
+          productName = 'High Protein Lassi (Rose)';
+          unit = 'ml';
+          if (!qtyMatch) quantity = 200;
+          const factor = quantity / 100;
+          calories = parseFloat((53.5 * factor).toFixed(2));
+          protein = parseFloat((7.5 * factor).toFixed(2));
+          carbs = parseFloat((6.0 * factor).toFixed(2));
+          fats = parseFloat((0.85 * factor).toFixed(2));
         } else if (lower.includes('egg') || lower.includes('eggs')) {
-          productName = 'Whole Boiled Eggs (3 pcs)';
-          calories = 210;
-          protein = 18;
-          carbs = 1.5;
-          fats = 15;
+          brand = 'Generic';
+          productName = 'Boiled Eggs';
+          unit = 'serving';
+          const count = qtyMatch ? quantity : 2;
+          quantity = count;
+          calories = count * 78;
+          protein = count * 6.3;
+          carbs = count * 0.6;
+          fats = count * 5.3;
         }
 
         action = {
           module: 'Nutrition',
-          type: 'Log Meal',
+          type: 'Meal',
+          meal_type: mealType,
+          food_product_id: foodProductId,
           productName,
-          isBranded,
+          brand,
+          quantity,
+          unit,
           calories,
           protein,
           carbs,
           fats,
-          details: text,
+          isVerified,
+          description: text,
+          date: new Date().toISOString().split('T')[0],
         };
-        responseMsg = `Identified: ${productName} (${protein}g Protein, ${calories} kcal). Would you like me to record this to your Daily Nutrition?`;
+        responseMsg = `Identified: ${quantity} ${unit} of ${productName} (${protein}g Protein, ${calories} kcal). Confirm below to log this to ${mealType}.`;
       }
-      // 3. Fitness Intent: Workout / Chest / Bench / Reps / Sets
+      // 4. Fitness Intent
       else if (lower.includes('workout') || lower.includes('bench press') || lower.includes('squat') || lower.includes('gym') || lower.includes('sets') || lower.includes('lifted')) {
         action = {
           module: 'Fitness',
@@ -204,27 +299,10 @@ export function CopilotProvider({ children }) {
         };
         responseMsg = `Great session! I've prepared a workout log for ${action.exercise} (3 sets × 12 reps @ 40 kg). Confirm below to save to your fitness history.`;
       }
-      // 4. Habit Intent: Water / Read / Sleep / Streak
-      else if (lower.includes('water') || lower.includes('drank') || lower.includes('habit') || lower.includes('read') || lower.includes('study')) {
-        let habitName = 'Water Intake';
-        if (lower.includes('water')) habitName = 'Drink Water (500 ml)';
-        else if (lower.includes('read')) habitName = 'Read for 30 mins';
-        else if (lower.includes('study')) habitName = 'Study 2 hours';
-
-        action = {
-          module: 'Habits',
-          type: 'Complete Habit',
-          habitName,
-          details: text,
-        };
-        responseMsg = `Logged progress for habit: "${habitName}". Current streak maintained!`;
-      }
-      // 5. General / Overview
+      // 5. Default Fallback
       else {
-        responseMsg = `I understand you said: "${text}". I can perform actions in Finance, Nutrition, Fitness, and Habits. What would you like to log or review?`;
+        responseMsg = `I understand you said: "${text}". You can ask me to log expenses (e.g. 'spent 150 on coffee'), meals (e.g. 'ate 200g roasted chicken'), or hydration (e.g. 'drank 500 ml water').`;
       }
-
-      setPendingAction(action);
 
       setMessages((prev) => [
         ...prev,
@@ -232,10 +310,14 @@ export function CopilotProvider({ children }) {
           id: String(Date.now() + 1),
           sender: 'copilot',
           text: responseMsg,
-          action,
+          action: action || null,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
+
+      if (action) {
+        setPendingAction(action);
+      }
     } catch (err) {
       console.error('Copilot processing error:', err);
       setMessages((prev) => [
@@ -266,6 +348,34 @@ export function CopilotProvider({ children }) {
           Category: targetAction.category || 'General',
           PaymentMode: 'UPI',
         });
+      } else if (targetAction.module === 'Nutrition') {
+        if (targetAction.type === 'Water') {
+          await apiClient.post('/api/v1/nutrition/water', {
+            date: targetAction.date,
+            water_ml: targetAction.water_ml,
+          });
+        } else if (targetAction.type === 'Meal') {
+          await apiClient.post('/api/v1/nutrition/meals', {
+            date: targetAction.date,
+            meal_type: targetAction.meal_type || 'Snacks',
+            items: [
+              {
+                food_product_id: targetAction.food_product_id || null,
+                product_name: targetAction.productName,
+                brand_name: targetAction.brand || 'Generic',
+                logged_quantity: targetAction.quantity,
+                logged_unit: targetAction.unit,
+                calories: targetAction.calories,
+                protein: targetAction.protein,
+                carbohydrates: targetAction.carbs,
+                fats: targetAction.fats,
+              },
+            ],
+            notes: targetAction.description || 'Logged via TrackItOut Copilot',
+          });
+        }
+        // Broadcast custom event so NutritionPage automatically refreshes live
+        window.dispatchEvent(new Event('nutrition-updated'));
       }
 
       // Notify success

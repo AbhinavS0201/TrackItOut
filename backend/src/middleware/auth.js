@@ -10,10 +10,12 @@ function authMiddleware(req, res, next) {
 
   try {
     const token = header.split(' ')[1];
-    const payload = jwt.verify(token, JWT_SECRET);
+    const secret = process.env.JWT_SECRET || 'expense_tracker_secret_2024';
+    const payload = jwt.verify(token, secret);
     req.userId = payload.id;
     next();
   } catch (err) {
+    console.error('Auth middleware verification failure:', err.message);
     return res.status(401).json({ message: 'Invalid or expired session token.' });
   }
 }

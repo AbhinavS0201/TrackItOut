@@ -17,6 +17,10 @@ app.use(express.json());
 const financeRoutes = require('./src/routes/financeRoutes');
 app.use('/api/v1', financeRoutes);
 
+// Mount Modular Nutrition API Router
+const nutritionRoutes = require('./src/routes/nutritionRoutes');
+app.use('/api/v1/nutrition', nutritionRoutes);
+
 // ─── DB POOL ────────────────────────────────────────────────────────────────
 const pool = mysql.createPool({
   host:     process.env.DB_HOST     || 'localhost',
