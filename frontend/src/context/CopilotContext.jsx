@@ -211,7 +211,7 @@ export function CopilotProvider({ children }) {
           if (lower.includes('grilled')) productName = 'Chicken Breast (Grilled)';
           else if (lower.includes('raw')) productName = 'Chicken Breast (Raw)';
           else if (lower.includes('stewed') || lower.includes('boiled')) productName = 'Chicken Breast (Stewed)';
-          
+
           // Roasted chicken per 100g: 165 kcal, 31.02g protein, 3.57g fat
           const factor = (unit === 'g' ? quantity : 100) / 100;
           calories = parseFloat((165 * factor).toFixed(2));
@@ -286,18 +286,134 @@ export function CopilotProvider({ children }) {
         };
         responseMsg = `Identified: ${quantity} ${unit} of ${productName} (${protein}g Protein, ${calories} kcal). Confirm below to log this to ${mealType}.`;
       }
-      // 4. Fitness Intent
-      else if (lower.includes('workout') || lower.includes('bench press') || lower.includes('squat') || lower.includes('gym') || lower.includes('sets') || lower.includes('lifted')) {
-        action = {
-          module: 'Fitness',
-          type: 'Log Workout',
-          exercise: lower.includes('bench') ? 'Barbell Bench Press' : 'General Workout',
-          sets: 3,
-          reps: 12,
-          weight: 40,
-          details: text,
-        };
-        responseMsg = `Great session! I've prepared a workout log for ${action.exercise} (3 sets × 12 reps @ 40 kg). Confirm below to save to your fitness history.`;
+      // 4. Fitness Intent: Workout / Bench / Squat / Cardio / Treadmill / Rotation / Reschedule
+      else if (
+        lower.includes('workout') || lower.includes('bench press') || lower.includes('squat') ||
+        lower.includes('gym') || lower.includes('treadmill') || lower.includes('chest') ||
+        lower.includes('cardio') || lower.includes('rotation') || lower.includes('postpone') ||
+        lower.includes('reschedule') || lower.includes('1rm') || lower.includes('max')
+      ) {
+        const todayStr = new Date().toISOString().split('T')[0];
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+        // 4A. Query current workout rotation
+        if (lower.includes('rotation') || lower.includes('split') || (lower.includes('what') && lower.includes('next'))) {
+          try {
+            const rotRes = await apiClient.get('/api/v1/fitness/rotation');
+            const rotData = rotRes.data.data;
+            if (rotData) {
+              const currentRoutine = rotData.current_template_name || `Routine ${rotData.current_position}`;
+              responseMsg = `🏋️ Your current rotation position is **${currentRoutine}**.\nSequence: A (Chest+Shoulders+Abs) → B (Back+Abs) → C (Biceps+Triceps+Forearms) → D (Legs).\n\nWould you like me to start your **${currentRoutine}** workout?`;
+              action = {
+                module: 'Fitness',
+                type: 'Start Workout',
+                routine_code: rotData.current_position,
+                template_id: rotData.current_template_id || 1,
+                title: currentRoutine,
+                planned_date: todayStr,
+                advances_rotation: 1
+              };
+            } else {
+              responseMsg = `Your rotation state is not yet initialized. Head to the Fitness page to view your split routines.`;
+            }
+          } catch (e) {
+            responseMsg = `You are on the standard A/B/C/D rotation split. Today's target is Routine A (Chest + Shoulders + Abs).`;
+          }
+        }
+        // 4B. Postpone / Reschedule Workout
+        else if (lower.includes('postpone') || lower.includes('reschedule') || lower.includes('tomorrow')) {
+          action = {
+            module: 'Fitness',
+            type: 'Reschedule',
+            title: 'Reschedule Today’s Workout to Tomorrow',
+            newDate: tomorrowStr,
+            description: `Postpone workout from ${todayStr} to ${tomorrowStr}`
+          };
+          responseMsg = `I can reschedule your active workout to tomorrow (${tomorrowStr}). Your rotation position will be preserved. Confirm below:`;
+        }
+        // 4C. Treadmill Cardio Intent
+        else if (lower.includes('treadmill') || lower.includes('walk') || (lower.includes('cardio') && (lower.includes('min') || lower.includes('walk')))) {
+          let minutes = 20;
+          const minMatch = text.match(/(\d+)\s*(?:min|mins|minutes)\b/i);
+          if (minMatch) minutes = parseInt(minMatch[1], 10);
+
+          action = {
+            module: 'Fitness',
+            type: 'Log Cardio',
+            exercise_name: 'Treadmill Incline Walking',
+            exercise_id: 41, // seed_ex_treadmill_incline_walk
+            duration_minutes: minutes,
+            speed_kmh: 3.5,
+            incline_pct: 8.0,
+            date: todayStr
+          };
+          responseMsg = `🏃 Great aerobic fat oxidation! I've prepared a ${minutes}-minute Treadmill Incline Walk log (3.5 km/h, 8% incline). Confirm below to record to your daily activity:`;
+        }
+        // 4D. Start Chest / Routine Workout
+        else if (lower.includes('start') && (lower.includes('chest') || lower.includes('workout') || lower.includes('routine') || lower.includes('leg') || lower.includes('back'))) {
+          let code = 'A';
+          let title = 'Workout A: Chest + Shoulders + Abs';
+          let tmplId = 1;
+          if (lower.includes('back')) { code = 'B'; title = 'Workout B: Back + Abs'; tmplId = 2; }
+          else if (lower.includes('bicep') || lower.includes('tricep') || lower.includes('arm')) { code = 'C'; title = 'Workout C: Biceps + Triceps + Forearms'; tmplId = 3; }
+          else if (lower.includes('leg')) { code = 'D'; title = 'Workout D: Legs'; tmplId = 4; }
+
+          action = {
+            module: 'Fitness',
+            type: 'Start Workout',
+            routine_code: code,
+            template_id: tmplId,
+            title,
+            planned_date: todayStr,
+            advances_rotation: 1
+          };
+          responseMsg = `💪 Ready to train! I have initialized **${title}**. Confirm below to activate today's workout session:`;
+        }
+        // 4E. Strength Sets Logging (e.g. "I completed 3 sets of bench press at 40 kg")
+        else {
+          let exerciseName = 'Flat Bench Press';
+          let exerciseId = 2;
+          if (lower.includes('squat')) { exerciseName = 'Squats'; exerciseId = 40; }
+          else if (lower.includes('row')) { exerciseName = 'Bent-Over Barbell Rows'; exerciseId = 18; }
+          else if (lower.includes('lateral')) { exerciseName = 'Dumbbell Lateral Raises'; exerciseId = 7; }
+          else if (lower.includes('curl')) { exerciseName = 'Preacher Curls'; exerciseId = 24; }
+          else if (lower.includes('leg press')) { exerciseName = 'Leg Press'; exerciseId = 35; }
+
+          let weight = 40;
+          let reps = 12;
+          let setsCount = 3;
+
+          const weightMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:kg|kgs|kilos)\b/i);
+          if (weightMatch) weight = parseFloat(weightMatch[1]);
+
+          const repsMatch = text.match(/(\d+)\s*(?:reps?|repetitions?)\b/i);
+          if (repsMatch) reps = parseInt(repsMatch[1], 10);
+
+          const setsMatch = text.match(/(\d+)\s*sets?\b/i);
+          if (setsMatch) setsCount = parseInt(setsMatch[1], 10);
+
+          const isOneRepMax = reps === 1 || lower.includes('1rm') || lower.includes('one rep max') || lower.includes('1 rep max');
+
+          action = {
+            module: 'Fitness',
+            type: isOneRepMax ? 'Confirmed 1RM' : 'Log Workout',
+            exercise_name: exerciseName,
+            exercise_id: exerciseId,
+            sets_count: setsCount,
+            reps,
+            weight_kg: weight,
+            is_confirmed_1rm: isOneRepMax ? 1 : 0,
+            date: todayStr
+          };
+
+          if (isOneRepMax) {
+            responseMsg = `⚠️ **Confirmed 1RM Verification**: You are about to record a confirmed single-repetition maximum of **${weight} kg** on **${exerciseName}**. Please verify and confirm below to update your official Personal Records:`;
+          } else {
+            responseMsg = `Great work! I parsed: **${setsCount} sets × ${reps} reps @ ${weight} kg** on **${exerciseName}**. Confirm below to save to your workout history:`;
+          }
+        }
       }
       // 5. Default Fallback
       else {
@@ -376,6 +492,76 @@ export function CopilotProvider({ children }) {
         }
         // Broadcast custom event so NutritionPage automatically refreshes live
         window.dispatchEvent(new Event('nutrition-updated'));
+      } else if (targetAction.module === 'Fitness') {
+        if (targetAction.type === 'Start Workout') {
+          await apiClient.post('/api/v1/fitness/sessions', {
+            template_id: targetAction.template_id,
+            rotation_code: targetAction.routine_code,
+            title: targetAction.title,
+            planned_date: targetAction.planned_date,
+            status: 'planned',
+            advances_rotation: targetAction.advances_rotation || 1
+          });
+        } else if (targetAction.type === 'Reschedule') {
+          const overviewRes = await apiClient.get('/api/v1/fitness/overview');
+          const todaySessions = overviewRes.data?.data?.sessions || [];
+          if (todaySessions.length > 0) {
+            await apiClient.post(`/api/v1/fitness/sessions/${todaySessions[0].id}/reschedule`, {
+              newDate: targetAction.newDate
+            });
+          } else {
+            const rotRes = await apiClient.get('/api/v1/fitness/rotation');
+            const rot = rotRes.data?.data;
+            await apiClient.post('/api/v1/fitness/sessions', {
+              rotation_code: rot?.current_position || 'A',
+              title: rot?.current_template_name || 'Workout A: Chest + Shoulders + Abs',
+              planned_date: targetAction.newDate,
+              status: 'planned',
+              advances_rotation: 1
+            });
+          }
+        } else if (targetAction.type === 'Log Cardio') {
+          await apiClient.post('/api/v1/fitness/sessions', {
+            title: targetAction.exercise_name,
+            planned_date: targetAction.date,
+            actual_date: targetAction.date,
+            status: 'completed',
+            duration_minutes: targetAction.duration_minutes,
+            advances_rotation: 0,
+            sets: [
+              {
+                exercise_id: targetAction.exercise_id,
+                duration_seconds: targetAction.duration_minutes * 60,
+                speed_kmh: targetAction.speed_kmh,
+                incline_pct: targetAction.incline_pct
+              }
+            ]
+          });
+        } else if (targetAction.type === 'Confirmed 1RM' || targetAction.type === 'Log Workout') {
+          const setsPayload = [];
+          const count = targetAction.sets_count || 1;
+          for (let s = 1; s <= count; s++) {
+            setsPayload.push({
+              exercise_id: targetAction.exercise_id,
+              weight_kg: targetAction.weight_kg,
+              reps: targetAction.reps,
+              set_type: 'normal',
+              is_confirmed_1rm: targetAction.is_confirmed_1rm ? 1 : 0
+            });
+          }
+
+          await apiClient.post('/api/v1/fitness/sessions', {
+            title: `${targetAction.exercise_name} Session`,
+            planned_date: targetAction.date,
+            actual_date: targetAction.date,
+            status: 'completed',
+            duration_minutes: 45,
+            advances_rotation: 0,
+            sets: setsPayload
+          });
+        }
+        // Broadcast custom event so FitnessPage automatically refreshes live
+        window.dispatchEvent(new Event('fitness-updated'));
       }
 
       // Notify success

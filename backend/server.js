@@ -21,6 +21,10 @@ app.use('/api/v1', financeRoutes);
 const nutritionRoutes = require('./src/routes/nutritionRoutes');
 app.use('/api/v1/nutrition', nutritionRoutes);
 
+// Mount Modular Fitness API Router
+const fitnessRoutes = require('./src/routes/fitnessRoutes');
+app.use('/api/v1/fitness', fitnessRoutes);
+
 // ─── DB POOL ────────────────────────────────────────────────────────────────
 const pool = mysql.createPool({
   host:     process.env.DB_HOST     || 'localhost',
@@ -283,9 +287,9 @@ app.get('/transactions/:userId', auth, async (req, res) => {
   const { date, category, type, month, year, account_id, search } = req.query;
 
   let sql = `
-    SELECT 
-      t.id, t.user_id, t.account_id, t.transfer_account_id, t.type, t.amount, 
-      t.description, t.notes, t.category, t.payment_mode, t.txn_date, t.is_recurring, 
+    SELECT
+      t.id, t.user_id, t.account_id, t.transfer_account_id, t.type, t.amount,
+      t.description, t.notes, t.category, t.payment_mode, t.txn_date, t.is_recurring,
       t.created_at,
       a.name AS account_name,
       a.type AS account_type,
@@ -435,18 +439,18 @@ app.get('/summary/:userId', auth, async (req, res) => {
 
     // Aggregate Total Balance across all Active Accounts
     const [accSum] = await pool.query(
-      `SELECT SUM(current_balance) AS total_account_balance 
-       FROM accounts 
+      `SELECT SUM(current_balance) AS total_account_balance
+       FROM accounts
        WHERE user_id = ? AND status = 'Active'`,
       [req.userId]
     );
 
     // Aggregate Savings Goals
     const [goalSum] = await pool.query(
-      `SELECT 
-         SUM(current_amount) AS total_saved_goals, 
-         SUM(target_amount) AS total_target_goals 
-       FROM savings_goals 
+      `SELECT
+         SUM(current_amount) AS total_saved_goals,
+         SUM(target_amount) AS total_target_goals
+       FROM savings_goals
        WHERE user_id = ? AND status = 'Active'`,
       [req.userId]
     );
@@ -475,13 +479,17 @@ app.get('/summary/:userId', auth, async (req, res) => {
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
-initDB()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`🚀  Server running at http://localhost:${PORT}`);
+if (require.main === module) {
+  initDB()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`🚀  Server running at http://localhost:${PORT}`);
+      });
+    })
+    .catch(err => {
+      console.error('❌  DB init failed:', err.message);
+      process.exit(1);
     });
-  })
-  .catch(err => {
-    console.error('❌  DB init failed:', err.message);
-    process.exit(1);
-  });
+}
+
+module.exports = app;

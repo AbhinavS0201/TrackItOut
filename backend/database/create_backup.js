@@ -24,8 +24,8 @@ async function createBackup(customFilename) {
     sqlDump += `SET FOREIGN_KEY_CHECKS = 0;\n\n`;
 
     const [tables] = await connection.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
+      SELECT table_name
+      FROM information_schema.tables
       WHERE table_schema = 'expense_tracker'
     `);
 
@@ -46,6 +46,7 @@ async function createBackup(customFilename) {
             if (val === null) return 'NULL';
             if (typeof val === 'number') return val;
             if (val instanceof Date) return `'${val.toISOString().slice(0, 19).replace('T', ' ')}'`;
+            if (typeof val === 'object') return connection.escape(JSON.stringify(val));
             return connection.escape(val);
           }).join(', ');
           sqlDump += `INSERT INTO \`${tableName}\` (${keys}) VALUES (${values});\n`;

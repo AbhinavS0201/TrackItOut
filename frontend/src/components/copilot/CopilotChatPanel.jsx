@@ -174,11 +174,31 @@ export default function CopilotChatPanel() {
                 )}
 
                 {msg.action.module === 'Fitness' && (
-                  <div className="text-xs text-slate-200 mb-3">
-                    <div className="font-semibold text-white">{msg.action.exercise}</div>
-                    <div className="text-slate-300 mt-1">
-                      {msg.action.sets} sets × {msg.action.reps} reps @ {msg.action.weight} kg
+                  <div className="text-xs text-slate-200 mb-3 space-y-1">
+                    <div className="font-semibold text-white">
+                      {msg.action.title || msg.action.exercise_name || msg.action.exercise}
                     </div>
+                    {msg.action.type === 'Confirmed 1RM' && (
+                      <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-200 text-[11px] font-semibold flex items-center gap-1.5 mt-1.5">
+                        <span>⚠️ Official Personal Record Confirmation</span>
+                      </div>
+                    )}
+                    {msg.action.weight_kg && (
+                      <div className="text-slate-300 mt-1">
+                        {msg.action.sets_count ? `${msg.action.sets_count} sets × ` : ''}
+                        {msg.action.reps} reps @ <span className="font-bold text-aqua-teal">{msg.action.weight_kg} kg</span>
+                      </div>
+                    )}
+                    {msg.action.duration_minutes && (
+                      <div className="text-slate-300">
+                        Duration: {msg.action.duration_minutes} mins {msg.action.incline_pct ? `(${msg.action.incline_pct}% incline @ ${msg.action.speed_kmh} km/h)` : ''}
+                      </div>
+                    )}
+                    {msg.action.newDate && (
+                      <div className="text-slate-300">
+                        Reschedule to: <span className="font-semibold text-aqua-teal">{msg.action.newDate}</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
