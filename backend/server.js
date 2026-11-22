@@ -13,6 +13,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'expense_tracker_secret_2024';
 app.use(cors({ origin: '*', credentials: false }));
 app.use(express.json());
 
+// Mount Modular Finance API Router
+const financeRoutes = require('./src/routes/financeRoutes');
+app.use('/api/v1', financeRoutes);
+
 // ─── DB POOL ────────────────────────────────────────────────────────────────
 const pool = mysql.createPool({
   host:     process.env.DB_HOST     || 'localhost',
@@ -193,78 +197,136 @@ app.put('/budget', auth, async (req, res) => {
 
 // POST /add-transaction
 app.post('/add-transaction', auth, async (req, res) => {
-  const { Type, Amount, Description, Category, PaymentMode, Date: txnDate } = req.body;
+  const { Type, Amount, Description, Category, PaymentMode, Date: txnDate, AccountId, Notes } = req.body;
 
   if (!Type || !Amount || !Description)
     return res.status(400).json({ message: 'Type, amount, and description are required' });
 
-  if (!['Income', 'Expense'].includes(Type))
-    return res.status(400).json({ message: 'Type must be Income or Expense' });
+  if (!['Income', 'Expense', 'Transfer'].includes(Type))
+    return res.status(400).json({ message: 'Type must be Income, Expense or Transfer' });
 
   if (parseFloat(Amount) <= 0)
     return res.status(400).json({ message: 'Amount must be greater than 0' });
 
+  const conn = await pool.getConnection();
   try {
+    await conn.beginTransaction();
     const date = txnDate || new Date().toISOString().split('T')[0];
-    const [result] = await pool.query(
+    const amt = parseFloat(Amount);
+    const targetAccountId = AccountId ? parseInt(AccountId) : null;
+
+    if (targetAccountId) {
+      const [accCheck] = await conn.query(
+        'SELECT id, type, current_balance FROM accounts WHERE id = ? AND user_id = ? FOR UPDATE',
+        [targetAccountId, req.userId]
+      );
+      if (accCheck.length === 0) {
+        await conn.rollback();
+        return res.status(400).json({ message: 'Selected account does not belong to you' });
+      }
+
+      // If expense, check funds (unless credit card)
+      if (Type === 'Expense' && accCheck[0].type !== 'Credit Card' && parseFloat(accCheck[0].current_balance) < amt) {
+        await conn.rollback();
+        return res.status(400).json({ message: 'Insufficient balance in selected account' });
+      }
+
+      // Adjust account balance
+      const delta = Type === 'Income' ? amt : -amt;
+      await conn.query(
+        'UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?',
+        [delta, targetAccountId]
+      );
+    }
+
+    const [result] = await conn.query(
       `INSERT INTO transactions
-         (user_id, type, amount, description, category, payment_mode, txn_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (user_id, account_id, type, amount, description, category, payment_mode, notes, txn_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.userId,
+        targetAccountId,
         Type,
-        parseFloat(Amount),
+        amt,
         Description,
         Category   || 'General',
         PaymentMode || 'Cash',
+        Notes || null,
         date
       ]
     );
+
+    await conn.commit();
     res.status(201).json({
       message: 'Transaction added',
       id: result.insertId
     });
   } catch (err) {
+    await conn.rollback();
     console.error('Add transaction error:', err);
     res.status(500).json({ message: 'Server error' });
+  } finally {
+    conn.release();
   }
 });
 
-// GET /transactions/:userId  — filter by date, category, type, month
+// GET /transactions/:userId  — filter by date, category, type, month, account, search
 app.get('/transactions/:userId', auth, async (req, res) => {
   // Security: users can only access their own transactions
   if (parseInt(req.params.userId) !== req.userId)
     return res.status(403).json({ message: 'Forbidden' });
 
-  const { date, category, type, month, year } = req.query;
+  const { date, category, type, month, year, account_id, search } = req.query;
 
-  let sql    = 'SELECT * FROM transactions WHERE user_id = ?';
+  let sql = `
+    SELECT 
+      t.id, t.user_id, t.account_id, t.transfer_account_id, t.type, t.amount, 
+      t.description, t.notes, t.category, t.payment_mode, t.txn_date, t.is_recurring, 
+      t.created_at,
+      a.name AS account_name,
+      a.type AS account_type,
+      ta.name AS transfer_account_name
+    FROM transactions t
+    LEFT JOIN accounts a ON t.account_id = a.id
+    LEFT JOIN accounts ta ON t.transfer_account_id = ta.id
+    WHERE t.user_id = ?
+  `;
   const args = [req.userId];
 
   if (date) {
-    sql += ' AND txn_date = ?';
+    sql += ' AND t.txn_date = ?';
     args.push(date);
   }
 
   if (month && year) {
-    sql += ' AND MONTH(txn_date) = ? AND YEAR(txn_date) = ?';
+    sql += ' AND MONTH(t.txn_date) = ? AND YEAR(t.txn_date) = ?';
     args.push(month, year);
   } else if (year) {
-    sql += ' AND YEAR(txn_date) = ?';
+    sql += ' AND YEAR(t.txn_date) = ?';
     args.push(year);
   }
 
   if (category) {
-    sql += ' AND category = ?';
+    sql += ' AND t.category = ?';
     args.push(category);
   }
 
-  if (type && ['Income', 'Expense'].includes(type)) {
-    sql += ' AND type = ?';
+  if (type && ['Income', 'Expense', 'Transfer'].includes(type)) {
+    sql += ' AND t.type = ?';
     args.push(type);
   }
 
-  sql += ' ORDER BY txn_date DESC, created_at DESC';
+  if (account_id) {
+    sql += ' AND (t.account_id = ? OR t.transfer_account_id = ?)';
+    args.push(account_id, account_id);
+  }
+
+  if (search) {
+    sql += ' AND (t.description LIKE ? OR t.notes LIKE ?)';
+    args.push(`%${search}%`, `%${search}%`);
+  }
+
+  sql += ' ORDER BY t.txn_date DESC, t.created_at DESC';
 
   try {
     const [rows] = await pool.query(sql, args);
@@ -277,27 +339,48 @@ app.get('/transactions/:userId', auth, async (req, res) => {
 
 // DELETE /transaction/:id
 app.delete('/transaction/:id', auth, async (req, res) => {
+  const conn = await pool.getConnection();
   try {
-    const [rows] = await pool.query(
-      'SELECT user_id FROM transactions WHERE id = ?',
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query(
+      'SELECT id, user_id, account_id, type, amount FROM transactions WHERE id = ? FOR UPDATE',
       [req.params.id]
     );
-    if (rows.length === 0)
+    if (rows.length === 0) {
+      await conn.rollback();
       return res.status(404).json({ message: 'Transaction not found' });
+    }
 
-    if (rows[0].user_id !== req.userId)
+    const txn = rows[0];
+    if (txn.user_id !== req.userId) {
+      await conn.rollback();
       return res.status(403).json({ message: 'Forbidden' });
+    }
 
-    await pool.query('DELETE FROM transactions WHERE id = ?', [req.params.id]);
+    // Revert account balance if linked
+    if (txn.account_id && ['Income', 'Expense'].includes(txn.type)) {
+      const revertDelta = txn.type === 'Income' ? -parseFloat(txn.amount) : parseFloat(txn.amount);
+      await conn.query(
+        'UPDATE accounts SET current_balance = current_balance + ? WHERE id = ?',
+        [revertDelta, txn.account_id]
+      );
+    }
+
+    await conn.query('DELETE FROM transactions WHERE id = ?', [req.params.id]);
+    await conn.commit();
     res.json({ message: 'Transaction deleted' });
   } catch (err) {
+    await conn.rollback();
     res.status(500).json({ message: 'Server error' });
+  } finally {
+    conn.release();
   }
 });
 
 // ─── SUMMARY / ANALYTICS ───────────────────────────────────────────────────
 
-// GET /summary/:userId  — totals + category breakdown
+// GET /summary/:userId  — totals + category breakdown (Excludes Transfers)
 app.get('/summary/:userId', auth, async (req, res) => {
   if (parseInt(req.params.userId) !== req.userId)
     return res.status(403).json({ message: 'Forbidden' });
@@ -312,18 +395,18 @@ app.get('/summary/:userId', auth, async (req, res) => {
   }
 
   try {
-    // Totals
+    // Totals (Transfers strictly excluded from income and expenses)
     const [totals] = await pool.query(
       `SELECT
          SUM(CASE WHEN type='Income'  THEN amount ELSE 0 END) AS total_income,
          SUM(CASE WHEN type='Expense' THEN amount ELSE 0 END) AS total_expense,
-         COUNT(*) AS txn_count
+         COUNT(CASE WHEN type != 'Transfer' THEN 1 END) AS txn_count
        FROM transactions
        WHERE user_id = ?${dateClause}`,
       args
     );
 
-    // Category breakdown (expenses only)
+    // Category breakdown (expenses only, excluding transfers)
     const [byCategory] = await pool.query(
       `SELECT category, SUM(amount) AS total
        FROM transactions
@@ -333,21 +416,51 @@ app.get('/summary/:userId', auth, async (req, res) => {
       args
     );
 
-    // Monthly trend (last 6 months)
+    // Monthly trend (last 6 months, excluding transfers)
     const [monthly] = await pool.query(
       `SELECT
          DATE_FORMAT(txn_date, '%Y-%m') AS month_label,
          SUM(CASE WHEN type='Income'  THEN amount ELSE 0 END) AS income,
          SUM(CASE WHEN type='Expense' THEN amount ELSE 0 END) AS expense
        FROM transactions
-       WHERE user_id = ? AND txn_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+       WHERE user_id = ? AND type != 'Transfer' AND txn_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
        GROUP BY month_label
        ORDER BY month_label ASC`,
       [req.userId]
     );
 
+    // Aggregate Total Balance across all Active Accounts
+    const [accSum] = await pool.query(
+      `SELECT SUM(current_balance) AS total_account_balance 
+       FROM accounts 
+       WHERE user_id = ? AND status = 'Active'`,
+      [req.userId]
+    );
+
+    // Aggregate Savings Goals
+    const [goalSum] = await pool.query(
+      `SELECT 
+         SUM(current_amount) AS total_saved_goals, 
+         SUM(target_amount) AS total_target_goals 
+       FROM savings_goals 
+       WHERE user_id = ? AND status = 'Active'`,
+      [req.userId]
+    );
+
+    const inc = parseFloat(totals[0].total_income || 0);
+    const exp = parseFloat(totals[0].total_expense || 0);
+    const totalBal = parseFloat(accSum[0].total_account_balance || (inc - exp));
+
     res.json({
-      totals:     totals[0],
+      totals: {
+        total_income: inc,
+        total_expense: exp,
+        total_savings: inc - exp,
+        total_account_balance: totalBal,
+        total_saved_goals: parseFloat(goalSum[0].total_saved_goals || 0),
+        total_target_goals: parseFloat(goalSum[0].total_target_goals || 0),
+        txn_count: totals[0].txn_count || 0,
+      },
       byCategory,
       monthly
     });
